@@ -107,13 +107,6 @@ func NewStatsHolder(firstBlockNum int64, updateBlockNumDiffThreshold uint16, upd
 	return &StatsHolder{Stats: stats}
 }
 
-// UpdateCurrentNextSlot updates the auction stats
-func (s *StatsHolder) UpdateCurrentNextSlot(current *common.Slot, next *common.Slot) {
-	s.rw.Lock()
-	s.Sync.Auction.CurrentSlot = *current
-	s.Sync.Auction.NextSlot = *next
-	s.rw.Unlock()
-}
 
 // UpdateSync updates the synchronizer stats
 func (s *StatsHolder) UpdateSync(lastBlock *common.Block, lastBatch *common.Batch,

@@ -111,13 +111,6 @@ func NewStatsHolder(firstBlockNum int64, updateBlockNumDiffThreshold uint16, upd
 	return &StatsHolder{Stats: stats}
 }
 
-// UpdateCurrentNextSlot updates the auction stats
-func (s *StatsHolder) UpdateCurrentNextSlot(current *common.Slot, next *common.Slot) {
-	s.rw.Lock()
-	s.Sync.Auction.CurrentSlot = *current
-	s.Sync.Auction.NextSlot = *next
-	s.rw.Unlock()
-}
 
 // UpdateSync updates the synchronizer stats
 func (s *StatsHolder) UpdateSync(lastBlock *common.Block, lastBatch *common.Batch,
@@ -151,34 +144,6 @@ func (s *StatsHolder) UpdateEth(ethClient eth.ClientInterface) error {
 	s.Eth.LastBatchNum = lastBatchNum
 	s.rw.Unlock()
 	return nil
-}
-
-// CopyStats returns a copy of the inner Stats
-func (s *StatsHolder) CopyStats() *Stats {
-	s.rw.RLock()
-	sCopy := s.Stats
-	if s.Sync.Auction.CurrentSlot.BidValue != nil {
-		sCopy.Sync.Auction.CurrentSlot.BidValue =
-			common.CopyBigInt(s.Sync.Auction.CurrentSlot.BidValue)
-	}
-	if s.Sync.Auction.CurrentSlot.DefaultSlotBid != nil {
-		sCopy.Sync.Auction.CurrentSlot.DefaultSlotBid =
-			common.CopyBigInt(s.Sync.Auction.CurrentSlot.DefaultSlotBid)
-	}
-	if s.Sync.Auction.NextSlot.BidValue != nil {
-		sCopy.Sync.Auction.NextSlot.BidValue =
-			common.CopyBigInt(s.Sync.Auction.NextSlot.BidValue)
-	}
-	if s.Sync.Auction.NextSlot.DefaultSlotBid != nil {
-		sCopy.Sync.Auction.NextSlot.DefaultSlotBid =
-			common.CopyBigInt(s.Sync.Auction.NextSlot.DefaultSlotBid)
-	}
-	if s.Sync.LastBatch.StateRoot != nil {
-		sCopy.Sync.LastBatch.StateRoot =
-			common.CopyBigInt(s.Sync.LastBatch.StateRoot)
-	}
-	s.rw.RUnlock()
-	return &sCopy
 }
 
 func (s *StatsHolder) blocksPerc() float64 {
@@ -293,19 +258,11 @@ func (s *Synchronizer) Stats() *Stats {
 	return s.stats.CopyStats()
 }
 
-// AuctionConstants returns the AuctionConstants read from the smart contract
-func (s *Synchronizer) AuctionConstants() *common.AuctionConstants {
-	return &s.consts.Auction
-}
+
 
 // RollupConstants returns the RollupConstants read from the smart contract
 func (s *Synchronizer) RollupConstants() *common.RollupConstants {
 	return &s.consts.Rollup
-}
-
-// WDelayerConstants returns the WDelayerConstants read from the smart contract
-func (s *Synchronizer) WDelayerConstants() *common.WDelayerConstants {
-	return &s.consts.WDelayer
 }
 
 // SCVars returns a copy of the Smart Contract Variables
@@ -315,129 +272,6 @@ func (s *Synchronizer) SCVars() *common.SCVariables {
 		Auction:  *s.vars.Auction.Copy(),
 		WDelayer: *s.vars.WDelayer.Copy(),
 	}
-}
-
-// setSlotCoordinator queries the highest bidder of a slot in the HistoryDB to
-// determine the coordinator that can bid in a slot
-func (s *Synchronizer) setSlotCoordinator(slot *common.Slot) error {
-	bidCoord, err := s.historyDB.GetBestBidCoordinator(slot.SlotNum)
-	if err != nil && tracerr.Unwrap(err) != sql.ErrNoRows {
-		return tracerr.Wrap(err)
-	}
-	if tracerr.Unwrap(err) == sql.ErrNoRows {
-		slot.BootCoord = true
-		slot.Forger = s.vars.Auction.BootCoordinator
-		slot.URL = s.vars.Auction.BootCoordinatorURL
-	} else if err == nil {
-		slot.BidValue = bidCoord.BidValue
-		slot.DefaultSlotBid = bidCoord.DefaultSlotSetBid[slot.SlotNum%6]
-		// Only if the highest bid value is greater/equal than
-		// the default slot bid, the bidder is the winner of
-		// the slot.  Otherwise the boot coordinator is the
-		// winner.
-		if slot.BidValue.Cmp(slot.DefaultSlotBid) >= 0 {
-			slot.Bidder = bidCoord.Bidder
-			slot.Forger = bidCoord.Forger
-			slot.URL = bidCoord.URL
-		} else {
-			slot.BootCoord = true
-			slot.Forger = s.vars.Auction.BootCoordinator
-			slot.URL = s.vars.Auction.BootCoordinatorURL
-		}
-	}
-	return nil
-}
-
-// updateCurrentSlot updates the slot with information of the current slot.
-// The information about which coordinator is allowed to forge is only updated
-// when we are Synced.
-// hasBatch is true when the last synced block contained at least one batch.
-func (s *Synchronizer) updateCurrentSlot(slot *common.Slot, reset bool, hasBatch bool) error {
-	// We want the next block because the current one is already mined
-	blockNum := s.stats.Sync.LastBlock.Num + 1
-	slotNum := s.consts.Auction.SlotNum(blockNum)
-	syncLastBlockNum := s.stats.Sync.LastBlock.Num
-	if reset {
-		// Using this query only to know if there
-		dbFirstBatchBlockNum, err := s.historyDB.GetFirstBatchBlockNumBySlot(slotNum)
-		if err != nil && tracerr.Unwrap(err) != sql.ErrNoRows {
-			return tracerr.Wrap(fmt.Errorf("historyDB.GetFirstBatchBySlot: %w", err))
-		} else if tracerr.Unwrap(err) == sql.ErrNoRows {
-			hasBatch = false
-		} else {
-			hasBatch = true
-			syncLastBlockNum = dbFirstBatchBlockNum
-		}
-		slot.ForgerCommitment = false
-	} else if slotNum > slot.SlotNum {
-		// We are in a new slotNum, start from default values
-		slot.ForgerCommitment = false
-	}
-	slot.SlotNum = slotNum
-	slot.StartBlock, slot.EndBlock = s.consts.Auction.SlotBlocks(slot.SlotNum)
-	if hasBatch && s.consts.Auction.RelativeBlock(syncLastBlockNum) < int64(s.vars.Auction.SlotDeadline) {
-		slot.ForgerCommitment = true
-	}
-	// If Synced, update the current coordinator
-	if s.stats.Synced() && blockNum >= s.consts.Auction.GenesisBlockNum {
-		if err := s.setSlotCoordinator(slot); err != nil {
-			return tracerr.Wrap(err)
-		}
-
-		canForge, err := s.EthClient.AuctionCanForge(slot.Forger, blockNum)
-		if err != nil {
-			return tracerr.Wrap(fmt.Errorf("AuctionCanForge: %w", err))
-		}
-		if !canForge {
-			return tracerr.Wrap(fmt.Errorf("Synchronized value of forger address for closed slot "+
-				"differs from smart contract: %+v", slot))
-		}
-	}
-	return nil
-}
-
-// updateNextSlot updates the slot with information of the next slot.
-// The information about which coordinator is allowed to forge is only updated
-// when we are Synced.
-func (s *Synchronizer) updateNextSlot(slot *common.Slot) error {
-	// We want the next block because the current one is already mined
-	blockNum := s.stats.Sync.LastBlock.Num + 1
-	slotNum := s.consts.Auction.SlotNum(blockNum) + 1
-	slot.SlotNum = slotNum
-	slot.ForgerCommitment = false
-	slot.StartBlock, slot.EndBlock = s.consts.Auction.SlotBlocks(slot.SlotNum)
-	// If Synced, update the current coordinator
-	if s.stats.Synced() && blockNum >= s.consts.Auction.GenesisBlockNum {
-		if err := s.setSlotCoordinator(slot); err != nil {
-			return tracerr.Wrap(err)
-		}
-
-		canForge, err := s.EthClient.AuctionCanForge(slot.Forger, slot.StartBlock)
-		if err != nil {
-			return tracerr.Wrap(fmt.Errorf("AuctionCanForge: %w", err))
-		}
-		if !canForge {
-			return tracerr.Wrap(fmt.Errorf("Synchronized value of forger address for closed slot "+
-				"differs from smart contract: %+v", slot))
-		}
-	}
-	return nil
-}
-
-// updateCurrentNextSlotIfSync updates the current and next slot.  Information
-// about forger address that is allowed to forge is only updated if we are
-// Synced.
-func (s *Synchronizer) updateCurrentNextSlotIfSync(reset bool, hasBatch bool) error {
-	current := s.stats.Sync.Auction.CurrentSlot
-	next := s.stats.Sync.Auction.NextSlot
-	if err := s.updateCurrentSlot(&current, reset, hasBatch); err != nil {
-		return tracerr.Wrap(err)
-	}
-	if err := s.updateNextSlot(&next); err != nil {
-		return tracerr.Wrap(err)
-	}
-	s.stats.UpdateCurrentNextSlot(&current, &next)
-	return nil
 }
 
 func (s *Synchronizer) init() error {
@@ -1175,184 +1009,6 @@ func cutStringMax(s string, max int) string {
 		return s[:max]
 	}
 	return s
-}
-
-// auctionSync gets information from the Auction Contract
-func (s *Synchronizer) auctionSync(ethBlock *common.Block) (*common.AuctionData, error) {
-	blockNum := ethBlock.Num
-	var auctionData = common.NewAuctionData()
-
-	// Get auction events in the block
-	auctionEvents, err := s.EthClient.AuctionEventsByBlock(blockNum, &ethBlock.Hash)
-	if err != nil && err.Error() == errStrUnknownBlock {
-		return nil, tracerr.Wrap(ErrUnknownBlock)
-	} else if err != nil {
-		return nil, tracerr.Wrap(fmt.Errorf("AuctionEventsByBlock: %w", err))
-	}
-	// No events in this block
-	if auctionEvents == nil {
-		return &auctionData, nil
-	}
-
-	// Get bids
-	auctionData.Bids = make([]common.Bid, 0, len(auctionEvents.NewBid))
-	for _, evt := range auctionEvents.NewBid {
-		bid := common.Bid{
-			SlotNum:     evt.Slot,
-			BidValue:    evt.BidAmount,
-			Bidder:      evt.Bidder,
-			EthBlockNum: blockNum,
-		}
-		auctionData.Bids = append(auctionData.Bids, bid)
-	}
-
-	// Get Coordinators
-	auctionData.Coordinators = make([]common.Coordinator, 0, len(auctionEvents.SetCoordinator))
-	for _, evt := range auctionEvents.SetCoordinator {
-		coordinator := common.Coordinator{
-			Bidder:      evt.BidderAddress,
-			Forger:      evt.ForgerAddress,
-			URL:         evt.CoordinatorURL,
-			EthBlockNum: blockNum,
-		}
-		auctionData.Coordinators = append(auctionData.Coordinators, coordinator)
-	}
-
-	varsUpdate := false
-
-	for _, evt := range auctionEvents.NewSlotDeadline {
-		s.vars.Auction.SlotDeadline = evt.NewSlotDeadline
-		varsUpdate = true
-	}
-	for _, evt := range auctionEvents.NewClosedAuctionSlots {
-		s.vars.Auction.ClosedAuctionSlots = evt.NewClosedAuctionSlots
-		varsUpdate = true
-	}
-	for _, evt := range auctionEvents.NewOutbidding {
-		s.vars.Auction.Outbidding = evt.NewOutbidding
-		varsUpdate = true
-	}
-	for _, evt := range auctionEvents.NewDonationAddress {
-		s.vars.Auction.DonationAddress = evt.NewDonationAddress
-		varsUpdate = true
-	}
-	for _, evt := range auctionEvents.NewBootCoordinator {
-		s.vars.Auction.BootCoordinator = evt.NewBootCoordinator
-		s.vars.Auction.BootCoordinatorURL = evt.NewBootCoordinatorURL
-		varsUpdate = true
-		// Add new boot coordinator
-		auctionData.Coordinators = append(auctionData.Coordinators, common.Coordinator{
-			Forger:      evt.NewBootCoordinator,
-			URL:         evt.NewBootCoordinatorURL,
-			EthBlockNum: blockNum,
-		})
-	}
-	for _, evt := range auctionEvents.NewOpenAuctionSlots {
-		s.vars.Auction.OpenAuctionSlots = evt.NewOpenAuctionSlots
-		varsUpdate = true
-	}
-	for _, evt := range auctionEvents.NewAllocationRatio {
-		s.vars.Auction.AllocationRatio = evt.NewAllocationRatio
-		varsUpdate = true
-	}
-	for _, evt := range auctionEvents.NewDefaultSlotSetBid {
-		if evt.SlotSet > 6 { //nolint:gomnd
-			return nil, tracerr.Wrap(fmt.Errorf("unexpected SlotSet in "+
-				"auctionEvents.NewDefaultSlotSetBid: %v", evt.SlotSet))
-		}
-		s.vars.Auction.DefaultSlotSetBid[evt.SlotSet] = evt.NewInitialMinBid
-		s.vars.Auction.DefaultSlotSetBidSlotNum = s.consts.Auction.SlotNum(blockNum) +
-			int64(s.vars.Auction.ClosedAuctionSlots)
-		varsUpdate = true
-	}
-
-	// NOTE: We ignore NewForgeAllocated
-	// NOTE: We ignore NewForge because we're already tracking ForgeBatch event from Rollup
-	// NOTE: We ignore HEZClaimed
-
-	if varsUpdate {
-		s.vars.Auction.EthBlockNum = blockNum
-		auctionData.Vars = s.vars.Auction.Copy()
-	}
-
-	return &auctionData, nil
-}
-
-// wdelayerSync gets information from the Withdrawal Delayer Contract
-func (s *Synchronizer) wdelayerSync(ethBlock *common.Block) (*common.WDelayerData, error) {
-	blockNum := ethBlock.Num
-	wDelayerData := common.NewWDelayerData()
-
-	// Get wDelayer events in the block
-	wDelayerEvents, err := s.EthClient.WDelayerEventsByBlock(blockNum, &ethBlock.Hash)
-	if err != nil && err.Error() == errStrUnknownBlock {
-		return nil, tracerr.Wrap(ErrUnknownBlock)
-	} else if err != nil {
-		return nil, tracerr.Wrap(fmt.Errorf("WDelayerEventsByBlock: %w", err))
-	}
-	// No events in this block
-	if wDelayerEvents == nil {
-		return &wDelayerData, nil
-	}
-
-	wDelayerData.Deposits = make([]common.WDelayerTransfer, 0, len(wDelayerEvents.Deposit))
-	for _, evt := range wDelayerEvents.Deposit {
-		wDelayerData.Deposits = append(wDelayerData.Deposits, common.WDelayerTransfer{
-			Owner:  evt.Owner,
-			Token:  evt.Token,
-			Amount: evt.Amount,
-		})
-		wDelayerData.DepositsByTxHash[evt.TxHash] =
-			append(wDelayerData.DepositsByTxHash[evt.TxHash],
-				&wDelayerData.Deposits[len(wDelayerData.Deposits)-1])
-	}
-	wDelayerData.Withdrawals = make([]common.WDelayerTransfer, 0, len(wDelayerEvents.Withdraw))
-	for _, evt := range wDelayerEvents.Withdraw {
-		wDelayerData.Withdrawals = append(wDelayerData.Withdrawals, common.WDelayerTransfer{
-			Owner:  evt.Owner,
-			Token:  evt.Token,
-			Amount: evt.Amount,
-		})
-	}
-	wDelayerData.EscapeHatchWithdrawals = make([]common.WDelayerEscapeHatchWithdrawal, 0,
-		len(wDelayerEvents.EscapeHatchWithdrawal))
-	for _, evt := range wDelayerEvents.EscapeHatchWithdrawal {
-		wDelayerData.EscapeHatchWithdrawals = append(wDelayerData.EscapeHatchWithdrawals,
-			common.WDelayerEscapeHatchWithdrawal{
-				EthBlockNum: blockNum,
-				Who:         evt.Who,
-				To:          evt.To,
-				TokenAddr:   evt.Token,
-				Amount:      evt.Amount,
-			})
-	}
-
-	varsUpdate := false
-
-	for range wDelayerEvents.EmergencyModeEnabled {
-		s.vars.WDelayer.EmergencyMode = true
-		s.vars.WDelayer.EmergencyModeStartingBlock = blockNum
-		varsUpdate = true
-	}
-	for _, evt := range wDelayerEvents.NewWithdrawalDelay {
-		s.vars.WDelayer.WithdrawalDelay = evt.WithdrawalDelay
-		varsUpdate = true
-	}
-	for _, evt := range wDelayerEvents.NewEmergencyCouncil {
-		s.vars.WDelayer.EmergencyCouncilAddress = evt.NewEmergencyCouncil
-		varsUpdate = true
-	}
-	for _, evt := range wDelayerEvents.NewHermezGovernanceAddress {
-		s.vars.WDelayer.HermezGovernanceAddress = evt.NewHermezGovernanceAddress
-		varsUpdate = true
-	}
-
-	if varsUpdate {
-		s.vars.WDelayer.EthBlockNum = blockNum
-		wDelayerData.Vars = s.vars.WDelayer.Copy()
-	}
-
-	return &wDelayerData, nil
 }
 
 func getL1UserTx(eventsL1UserTx []eth.RollupEventL1UserTx, blockNum int64) ([]common.L1Tx, error) {

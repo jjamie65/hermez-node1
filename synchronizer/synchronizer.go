@@ -82,10 +82,6 @@ type Stats struct {
 		// l1Batch was forged
 		LastL1BatchBlock  int64
 		LastForgeL1TxsNum int64
-		Auction           struct {
-			CurrentSlot common.Slot
-			NextSlot    common.Slot
-		}
 	}
 }
 

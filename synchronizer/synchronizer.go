@@ -146,22 +146,7 @@ func (s *StatsHolder) UpdateEth(ethClient eth.ClientInterface) error {
 func (s *StatsHolder) CopyStats() *Stats {
 	s.rw.RLock()
 	sCopy := s.Stats
-	if s.Sync.Auction.CurrentSlot.BidValue != nil {
-		sCopy.Sync.Auction.CurrentSlot.BidValue =
-			common.CopyBigInt(s.Sync.Auction.CurrentSlot.BidValue)
-	}
-	if s.Sync.Auction.CurrentSlot.DefaultSlotBid != nil {
-		sCopy.Sync.Auction.CurrentSlot.DefaultSlotBid =
-			common.CopyBigInt(s.Sync.Auction.CurrentSlot.DefaultSlotBid)
-	}
-	if s.Sync.Auction.NextSlot.BidValue != nil {
-		sCopy.Sync.Auction.NextSlot.BidValue =
-			common.CopyBigInt(s.Sync.Auction.NextSlot.BidValue)
-	}
-	if s.Sync.Auction.NextSlot.DefaultSlotBid != nil {
-		sCopy.Sync.Auction.NextSlot.DefaultSlotBid =
-			common.CopyBigInt(s.Sync.Auction.NextSlot.DefaultSlotBid)
-	}
+	
 	if s.Sync.LastBatch.StateRoot != nil {
 		sCopy.Sync.LastBatch.StateRoot =
 			common.CopyBigInt(s.Sync.LastBatch.StateRoot)
@@ -217,25 +202,15 @@ type Synchronizer struct {
 // NewSynchronizer creates a new Synchronizer
 func NewSynchronizer(ethClient eth.ClientInterface, historyDB *historydb.HistoryDB,
 	l2DB *l2db.L2DB, stateDB *statedb.StateDB, cfg Config) (*Synchronizer, error) {
-	auctionConstants, err := ethClient.AuctionConstants()
-	if err != nil {
-		return nil, tracerr.Wrap(fmt.Errorf("NewSynchronizer ethClient.AuctionConstants(): %w",
-			err))
-	}
+
 	rollupConstants, err := ethClient.RollupConstants()
 	if err != nil {
 		return nil, tracerr.Wrap(fmt.Errorf("NewSynchronizer ethClient.RollupConstants(): %w",
 			err))
 	}
-	wDelayerConstants, err := ethClient.WDelayerConstants()
-	if err != nil {
-		return nil, tracerr.Wrap(fmt.Errorf("NewSynchronizer ethClient.WDelayerConstants(): %w",
-			err))
-	}
+
 	consts := common.SCConsts{
 		Rollup:   *rollupConstants,
-		Auction:  *auctionConstants,
-		WDelayer: *wDelayerConstants,
 	}
 
 	initVars, startBlockNums, err := getInitialVariables(ethClient, &consts)
@@ -244,18 +219,10 @@ func NewSynchronizer(ethClient eth.ClientInterface, historyDB *historydb.History
 	}
 	log.Infow("Synchronizer syncing from smart contract blocks",
 		"rollup", startBlockNums.Rollup,
-		"auction", startBlockNums.Auction,
-		"wdelayer", startBlockNums.WDelayer,
 	)
-	// Set startBlockNum to the minimum between Auction, Rollup and
-	// WDelayer StartBlockNum
-	startBlockNum := startBlockNums.Auction
-	if startBlockNums.Rollup < startBlockNum {
-		startBlockNum = startBlockNums.Rollup
-	}
-	if startBlockNums.WDelayer < startBlockNum {
-		startBlockNum = startBlockNums.WDelayer
-	}
+
+	startBlockNum := startBlockNums.Rollup
+
 	stats := NewStatsHolder(startBlockNum, cfg.StatsUpdateBlockNumDiffThreshold, cfg.StatsUpdateFrequencyDivider)
 	s := &Synchronizer{
 		EthClient:     ethClient,
@@ -292,8 +259,6 @@ func (s *Synchronizer) RollupConstants() *common.RollupConstants {
 func (s *Synchronizer) SCVars() *common.SCVariables {
 	return &common.SCVariables{
 		Rollup:   *s.vars.Rollup.Copy(),
-		Auction:  *s.vars.Auction.Copy(),
-		WDelayer: *s.vars.WDelayer.Copy(),
 	}
 }
 
@@ -450,18 +415,6 @@ func (s *Synchronizer) Sync(ctx context.Context,
 		return nil, nil, tracerr.Wrap(err)
 	}
 
-	// Get data from the auction contract
-	auctionData, err := s.auctionSync(ethBlock)
-	if err != nil {
-		return nil, nil, tracerr.Wrap(err)
-	}
-
-	// Get data from the WithdrawalDelayer contract
-	wDelayerData, err := s.wdelayerSync(ethBlock)
-	if err != nil {
-		return nil, nil, tracerr.Wrap(err)
-	}
-
 	for i := range rollupData.Withdrawals {
 		withdrawal := &rollupData.Withdrawals[i]
 		if !withdrawal.InstantWithdraw {
@@ -585,25 +538,13 @@ func getInitialVariables(ethClient eth.ClientInterface,
 	if err != nil {
 		return nil, nil, tracerr.Wrap(fmt.Errorf("RollupEventInit: %w", err))
 	}
-	auctionInit, auctionInitBlock, err := ethClient.AuctionEventInit(consts.Auction.GenesisBlockNum)
-	if err != nil {
-		return nil, nil, tracerr.Wrap(fmt.Errorf("AuctionEventInit: %w", err))
-	}
-	wDelayerInit, wDelayerInitBlock, err := ethClient.WDelayerEventInit(consts.Auction.GenesisBlockNum)
-	if err != nil {
-		return nil, nil, tracerr.Wrap(fmt.Errorf("WDelayerEventInit: %w", err))
-	}
+
 	rollupVars := rollupInit.RollupVariables()
-	auctionVars := auctionInit.AuctionVariables(consts.Auction.InitialMinimalBidding)
-	wDelayerVars := wDelayerInit.WDelayerVariables()
+
 	return &common.SCVariables{
 			Rollup:   *rollupVars,
-			Auction:  *auctionVars,
-			WDelayer: *wDelayerVars,
 		}, &StartBlockNums{
 			Rollup:   rollupInitBlock,
-			Auction:  auctionInitBlock,
-			WDelayer: wDelayerInitBlock,
 		}, nil
 }
 

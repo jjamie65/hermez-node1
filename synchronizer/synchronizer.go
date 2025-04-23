@@ -142,33 +142,6 @@ func (s *StatsHolder) UpdateEth(ethClient eth.ClientInterface) error {
 	return nil
 }
 
-// CopyStats returns a copy of the inner Stats
-func (s *StatsHolder) CopyStats() *Stats {
-	s.rw.RLock()
-	sCopy := s.Stats
-	
-	if s.Sync.LastBatch.StateRoot != nil {
-		sCopy.Sync.LastBatch.StateRoot =
-			common.CopyBigInt(s.Sync.LastBatch.StateRoot)
-	}
-	s.rw.RUnlock()
-	return &sCopy
-}
-
-func (s *StatsHolder) blocksPerc() float64 {
-	syncLastBlockNum := s.Sync.LastBlock.Num
-	if s.Sync.LastBlock.Num == 0 {
-		syncLastBlockNum = s.Eth.FirstBlockNum - 1
-	}
-	return float64(syncLastBlockNum-(s.Eth.FirstBlockNum-1)) * 100.0 /
-		float64(s.Eth.LastBlock.Num-(s.Eth.FirstBlockNum-1))
-}
-
-func (s *StatsHolder) batchesPerc(batchNum common.BatchNum) float64 {
-	return float64(batchNum) * 100.0 /
-		float64(s.Eth.LastBatchNum)
-}
-
 // StartBlockNums sets the first block used to start tracking the smart
 // contracts
 type StartBlockNums struct {
@@ -242,13 +215,6 @@ func NewSynchronizer(ethClient eth.ClientInterface, historyDB *historydb.History
 func (s *Synchronizer) StateDB() *statedb.StateDB {
 	return s.stateDB
 }
-
-// Stats returns a copy of the Synchronizer Stats.  It is safe to call Stats()
-// during a Sync call
-func (s *Synchronizer) Stats() *Stats {
-	return s.stats.CopyStats()
-}
-
 
 // RollupConstants returns the RollupConstants read from the smart contract
 func (s *Synchronizer) RollupConstants() *common.RollupConstants {

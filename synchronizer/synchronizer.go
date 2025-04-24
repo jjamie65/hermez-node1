@@ -549,6 +549,18 @@ func (s *Synchronizer) resetState(block *common.Block) error {
 	return nil
 }
 
+
+
+
+
+
+
+
+
+
+
+
+
 // rollupSync retrieves all the Rollup Smart Contract Data that happened at
 // ethBlock.blockNum with ethBlock.Hash.
 func (s *Synchronizer) rollupSync(ethBlock *common.Block) (*common.RollupData, error) {
@@ -632,45 +644,7 @@ func (s *Synchronizer) rollupSync(ethBlock *common.Block) (*common.RollupData, e
 		l1TxsAuth := make([]common.AccountCreationAuth,
 			0, len(forgeBatchArgs.L1CoordinatorTxsAuths))
 		batchData.L1CoordinatorTxs = make([]common.L1Tx, 0, len(forgeBatchArgs.L1CoordinatorTxs))
-		// Get L1 Coordinator Txs
-		for i := range forgeBatchArgs.L1CoordinatorTxs {
-			l1CoordinatorTx := forgeBatchArgs.L1CoordinatorTxs[i]
-			l1CoordinatorTx.Position = position
-			// l1CoordinatorTx.ToForgeL1TxsNum = &forgeL1TxsNum
-			l1CoordinatorTx.UserOrigin = false
-			l1CoordinatorTx.EthBlockNum = blockNum
-			l1CoordinatorTx.BatchNum = &batchNum
-			l1CoordinatorTx.EthTxHash = ethTxHash
-			l1Tx, err := common.NewL1Tx(&l1CoordinatorTx)
-			if err != nil {
-				return nil, tracerr.Wrap(err)
-			}
-
-			batchData.L1CoordinatorTxs = append(batchData.L1CoordinatorTxs, *l1Tx)
-			position++
-
-			// Create a slice of account creation auth to be
-			// inserted later if not exists
-			if l1CoordinatorTx.FromEthAddr != common.RollupConstEthAddressInternalOnly {
-				l1CoordinatorTxAuth := forgeBatchArgs.L1CoordinatorTxsAuths[i]
-				l1TxsAuth = append(l1TxsAuth, common.AccountCreationAuth{
-					EthAddr:   l1CoordinatorTx.FromEthAddr,
-					BJJ:       l1CoordinatorTx.FromBJJ,
-					Signature: l1CoordinatorTxAuth,
-				})
-			}
-
-			// fmt.Println("DGB l1coordtx")
-		}
-
-		// Insert the slice of account creation auth
-		// only if the node run as a coordinator
-		if s.l2DB != nil && len(l1TxsAuth) > 0 {
-			err = s.l2DB.AddManyAccountCreationAuth(l1TxsAuth)
-			if err != nil {
-				return nil, tracerr.Wrap(err)
-			}
-		}
+		
 
 		// Insert all the txs forged in this batch (l1UserTxs,
 		// L1CoordinatorTxs, PoolL2Txs) into stateDB so that they are
@@ -798,65 +772,6 @@ func (s *Synchronizer) rollupSync(ethBlock *common.Block) (*common.RollupData, e
 		rollupData.Batches = append(rollupData.Batches, *batchData)
 	}
 
-	// Get Registered Tokens
-	for _, evtAddToken := range rollupEvents.AddToken {
-		var token common.Token
-
-		token.TokenID = common.TokenID(evtAddToken.TokenID)
-		token.EthAddr = evtAddToken.TokenAddress
-		token.EthBlockNum = blockNum
-
-		if consts, err := s.EthClient.EthERC20Consts(evtAddToken.TokenAddress); err != nil {
-			log.Warnw("Error retrieving ERC20 token constants", "addr", evtAddToken.TokenAddress)
-			token.Name = "ERC20_ETH_ERROR"
-			token.Symbol = "ERROR"
-			token.Decimals = 1
-		} else {
-			token.Name = cutStringMax(consts.Name, 20)
-			token.Symbol = cutStringMax(consts.Symbol, 10)
-			token.Decimals = consts.Decimals
-		}
-
-		rollupData.AddedTokens = append(rollupData.AddedTokens, token)
-	}
-
-	rollupData.UpdateBucketWithdraw = make([]common.BucketUpdate, 0, len(rollupEvents.UpdateBucketWithdraw))
-	for _, evt := range rollupEvents.UpdateBucketWithdraw {
-		rollupData.UpdateBucketWithdraw = append(rollupData.UpdateBucketWithdraw,
-			common.BucketUpdate{
-				EthBlockNum: blockNum,
-				NumBucket:   evt.NumBucket,
-				BlockStamp:  evt.BlockStamp,
-				Withdrawals: evt.Withdrawals,
-			})
-	}
-
-	rollupData.Withdrawals = make([]common.WithdrawInfo, 0, len(rollupEvents.Withdraw))
-	for _, evt := range rollupEvents.Withdraw {
-		rollupData.Withdrawals = append(rollupData.Withdrawals, common.WithdrawInfo{
-			Idx:             common.Idx(evt.Idx),
-			NumExitRoot:     common.BatchNum(evt.NumExitRoot),
-			InstantWithdraw: evt.InstantWithdraw,
-			TxHash:          evt.TxHash,
-		})
-	}
-
-	for _, evt := range rollupEvents.UpdateTokenExchange {
-		if len(evt.AddressArray) != len(evt.ValueArray) {
-			return nil, tracerr.Wrap(fmt.Errorf("in RollupEventUpdateTokenExchange "+
-				"len(AddressArray) != len(ValueArray) (%v != %v)",
-				len(evt.AddressArray), len(evt.ValueArray)))
-		}
-		for i := range evt.AddressArray {
-			rollupData.TokenExchanges = append(rollupData.TokenExchanges,
-				common.TokenExchange{
-					EthBlockNum: blockNum,
-					Address:     evt.AddressArray[i],
-					ValueUSD:    int64(evt.ValueArray[i]),
-				})
-		}
-	}
-
 	varsUpdate := false
 
 	for _, evt := range rollupEvents.UpdateForgeL1L2BatchTimeout {
@@ -874,26 +789,6 @@ func (s *Synchronizer) rollupSync(ethBlock *common.Block) (*common.RollupData, e
 		varsUpdate = true
 	}
 
-	// NOTE: We skip the event rollupEvents.SafeMode because the
-	// implementation RollupEventsByBlock already inserts a non-existing
-	// RollupEventUpdateBucketsParameters into UpdateBucketsParameters with
-	// all the bucket values at 0 and SafeMode = true
-	for _, evt := range rollupEvents.UpdateBucketsParameters {
-		s.vars.Rollup.Buckets = make([]common.BucketParams, 0, len(evt.ArrayBuckets))
-		for _, bucket := range evt.ArrayBuckets {
-			s.vars.Rollup.Buckets = append(s.vars.Rollup.Buckets, common.BucketParams{
-				CeilUSD:         bucket.CeilUSD,
-				BlockStamp:      bucket.BlockStamp,
-				Withdrawals:     bucket.Withdrawals,
-				RateBlocks:      bucket.RateBlocks,
-				RateWithdrawals: bucket.RateWithdrawals,
-				MaxWithdrawals:  bucket.MaxWithdrawals,
-			})
-		}
-		s.vars.Rollup.SafeMode = evt.SafeMode
-		varsUpdate = true
-	}
-
 	if varsUpdate {
 		s.vars.Rollup.EthBlockNum = blockNum
 		rollupData.Vars = s.vars.Rollup.Copy()
@@ -901,6 +796,26 @@ func (s *Synchronizer) rollupSync(ethBlock *common.Block) (*common.RollupData, e
 
 	return &rollupData, nil
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 func cutStringMax(s string, max int) string {
 	if len(s) > max {

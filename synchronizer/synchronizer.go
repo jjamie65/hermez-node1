@@ -637,14 +637,9 @@ func (s *Synchronizer) rollupSync(ethBlock *common.Block) (*common.RollupData, e
 					l1UserTxs = append(l1UserTxs, l1UserTx)
 				}
 			}
-
 			position = len(l1UserTxs)
 		}
 
-		l1TxsAuth := make([]common.AccountCreationAuth,
-			0, len(forgeBatchArgs.L1CoordinatorTxsAuths))
-		batchData.L1CoordinatorTxs = make([]common.L1Tx, 0, len(forgeBatchArgs.L1CoordinatorTxs))
-		
 
 		// Insert all the txs forged in this batch (l1UserTxs,
 		// L1CoordinatorTxs, PoolL2Txs) into stateDB so that they are

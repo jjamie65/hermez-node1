@@ -645,22 +645,6 @@ func (s *Synchronizer) rollupSync(ethBlock *common.Block) (*common.RollupData, e
 		// L1CoordinatorTxs, PoolL2Txs) into stateDB so that they are
 		// processed.
 
-		// Set TxType to the forged L2Txs
-		for i := range forgeBatchArgs.L2TxsData {
-			if err := forgeBatchArgs.L2TxsData[i].SetType(); err != nil {
-				return nil, tracerr.Wrap(err)
-			}
-		}
-
-		// Transform L2 txs to PoolL2Txs
-		// NOTE: This is a big ugly, find a better way
-		poolL2Txs := common.L2TxsToPoolL2Txs(forgeBatchArgs.L2TxsData)
-
-		if int(forgeBatchArgs.VerifierIdx) >= len(s.consts.Rollup.Verifiers) {
-			return nil, tracerr.Wrap(fmt.Errorf("forgeBatchArgs.VerifierIdx (%v) >= "+
-				" len(s.consts.Rollup.Verifiers) (%v)",
-				forgeBatchArgs.VerifierIdx, len(s.consts.Rollup.Verifiers)))
-		}
 		tpc := txprocessor.Config{
 			NLevels:  uint32(s.consts.Rollup.Verifiers[forgeBatchArgs.VerifierIdx].NLevels),
 			MaxTx:    uint32(s.consts.Rollup.Verifiers[forgeBatchArgs.VerifierIdx].MaxTx),
@@ -687,19 +671,6 @@ func (s *Synchronizer) rollupSync(ethBlock *common.Block) (*common.RollupData, e
 				s.stateDB.MT.Root().BigInt(), forgeBatchArgs.NewStRoot))
 		}
 
-		l2Txs := make([]common.L2Tx, len(poolL2Txs))
-		for i, tx := range poolL2Txs {
-			l2Txs[i] = tx.L2Tx()
-			// Set TxID, BlockNum, BatchNum and Position to the forged L2Txs
-			if err := l2Txs[i].SetID(); err != nil {
-				return nil, tracerr.Wrap(err)
-			}
-			l2Txs[i].EthBlockNum = blockNum
-			l2Txs[i].BatchNum = batchNum
-			l2Txs[i].Position = position
-			position++
-		}
-		batchData.L2Txs = l2Txs
 
 		// Set the BatchNum in the forged L1UserTxs
 		for i := range l1UserTxs {
@@ -707,12 +678,6 @@ func (s *Synchronizer) rollupSync(ethBlock *common.Block) (*common.RollupData, e
 		}
 		batchData.L1UserTxs = l1UserTxs
 
-		// Set batchNum in exits
-		for i := range processTxsOut.ExitInfos {
-			exit := &processTxsOut.ExitInfos[i]
-			exit.BatchNum = batchNum
-		}
-		batchData.ExitTree = processTxsOut.ExitInfos
 
 		for i := range processTxsOut.CreatedAccounts {
 			createdAccount := &processTxsOut.CreatedAccounts[i]
@@ -733,12 +698,6 @@ func (s *Synchronizer) rollupSync(ethBlock *common.Block) (*common.RollupData, e
 					Nonce:       acc.Nonce,
 					Balance:     acc.Balance,
 				})
-		}
-
-		slotNum := int64(0)
-		if ethBlock.Num >= s.consts.Auction.GenesisBlockNum {
-			slotNum = (ethBlock.Num - s.consts.Auction.GenesisBlockNum) /
-				int64(s.consts.Auction.BlocksPerSlot)
 		}
 
 		// Get Batch information
@@ -771,11 +730,6 @@ func (s *Synchronizer) rollupSync(ethBlock *common.Block) (*common.RollupData, e
 
 	for _, evt := range rollupEvents.UpdateForgeL1L2BatchTimeout {
 		s.vars.Rollup.ForgeL1L2BatchTimeout = evt.NewForgeL1L2BatchTimeout
-		varsUpdate = true
-	}
-
-	for _, evt := range rollupEvents.UpdateFeeAddToken {
-		s.vars.Rollup.FeeAddToken = evt.NewFeeAddToken
 		varsUpdate = true
 	}
 
